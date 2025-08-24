@@ -1,0 +1,113 @@
+name: Quora - automated poster (Puppeteer)
+
+on:
+  workflow_dispatch:        # manual runs from Actions UI
+    inputs:
+      mode:
+        description: "space or question (controls where to post)"
+        required: false
+        default: "question"
+      title:
+        description: "Post title or blog title (optional)"
+        required: false
+      snippet:
+        description: "Short teaser / summary"
+        required: false
+      url:
+        description: "Canonical blog URL"
+        required: false
+  repository_dispatch:
+    types: [post-quora]     # triggered by n8n via API (preferred)
+
+jobs:
+  post-to-quora:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare environment (extract payload)
+        shell: bash
+        run: |
+          # prefer repository_dispatch payload, otherwise fall back to workflow_dispatch inputs
+          if [ -n "${{ github.event.client_payload }}" ]; then
+            # github.event.client_payload is an object; use jq-like substitution via node
+            node -e "const p=process.env.GITHUB_EVENT_NAME==='repository_dispatch'?require(process.env.GITHUB_EVENT_PATH).client_payload:require(process.env.GITHUB_EVENT_PATH); console.log(JSON.stringify(p.client_payload || require(process.env.GITHUB_EVENT_PATH).client_payload || p))" > /tmp/payload.json || true
+          else
+            cat $GITHUB_EVENT_PATH > /tmp/payload.json || true
+          fi
+          # Fallback parsing for workflow_dispatch inputs (simple approach)
+          TITLE="${{ github.event.inputs.title || '' }}"
+          SNIPPET="${{ github.event.inputs.snippet || '' }}"
+          URL="${{ github.event.inputs.url || '' }}"
+          MODE="${{ github.event.inputs.mode || 'question' }}"
+          # save envs
+          echo "TITLE=$TITLE" >> $GITHUB_ENV
+          echo "SNIPPET=$SNIPPET" >> $GITHUB_ENV
+          echo "URL=$URL" >> $GITHUB_ENV
+          echo "MODE=$MODE" >> $GITHUB_ENV
+          # also attempt to read repository_dispatch client_payload fields into env
+          if [ -f /tmp/payload.json ]; then
+            # This will not parse nested JSON safely in shell for all cases but is adequate for our use (n8n sends plain fields).
+            PAYLOAD=$(cat /tmp/payload.json 2>/dev/null || echo "")
+            if [ -n "$PAYLOAD" ]; then
+              # Use node to extract safe fields
+              node -e "const fs=require('fs'); try{const p=JSON.parse(fs.readFileSync('/tmp/payload.json','utf8')); if(p.keyword) console.log('KW='+p.keyword); if(p.title) console.log('TITLE2='+p.title); if(p.summary) console.log('SNIPPET2='+p.summary); if(p.url) console.log('URL2='+p.url); }catch(e){}" >> /tmp/env_extract || true
+              if [ -f /tmp/env_extract ]; then
+                cat /tmp/env_extract >> /tmp/p_env || true
+                grep -E 'KW=' /tmp/p_env || true
+                # source extracted if present
+                if grep -q 'KW=' /tmp/p_env 2>/dev/null; then
+                  sed -n 's/^KW=//p' /tmp/p_env | head -n1 | xargs -I{} echo "KW={}" >> $GITHUB_ENV || true
+                fi
+                if grep -q 'TITLE2=' /tmp/p_env 2>/dev/null; then
+                  sed -n 's/^TITLE2=//p' /tmp/p_env | head -n1 | xargs -I{} echo "TITLE={}" >> $GITHUB_ENV || true
+                fi
+                if grep -q 'SNIPPET2=' /tmp/p_env 2>/dev/null; then
+                  sed -n 's/^SNIPPET2=//p' /tmp/p_env | head -n1 | xargs -I{} echo "SNIPPET={}" >> $GITHUB_ENV || true
+                fi
+                if grep -q 'URL2=' /tmp/p_env 2>/dev/null; then
+                  sed -n 's/^URL2=//p' /tmp/p_env | head -n1 | xargs -I{} echo "URL={}" >> $GITHUB_ENV || true
+                fi
+              fi
+            fi
+          fi
+
+      - name: Install system fonts (improves rendering)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-liberation fonts-noto-core
+
+      - name: Run Puppeteer script
+        env:
+          QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
+          QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
+          QUORA_SESSION_TOKEN: ${{ secrets.QUORA_SESSION_TOKEN }}   # optional 'm-b' cookie value
+          RETRY_MAX: "2"           # number of tries (script will attempt up to RETRY_MAX times)
+          NOTIFY_WEBHOOK: ${{ secrets.NOTIFY_WEBHOOK || '' }}  # optional webhook to notify n8n/you of result
+          KW: ${{ env.KW || env.TITLE || '' }}
+          TITLE: ${{ env.TITLE || '' }}
+          SNIPPET: ${{ env.SNIPPET || '' }}
+          URL: ${{ env.URL || '' }}
+          MODE: ${{ env.MODE || 'question' }}
+        run: |
+          mkdir -p tmp-screens
+          node scripts/quora-bot.js
+
+      - name: Upload screenshots and run-log (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quora-debug
+          path: |
+            tmp-screens/**
+            run-log.txt
