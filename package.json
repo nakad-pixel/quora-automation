@@ -1,0 +1,13 @@
+{
+  "name": "quora-automation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/quora-bot.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.13.1",
+    "fs-extra": "^11.1.1"
+  }
+}
