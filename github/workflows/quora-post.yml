@@ -1,12 +1,12 @@
-name: Quora Automation
+name: Quora Poster
 
 on:
-  workflow_dispatch:   # lets you run it manually
-  repository_dispatch: # lets external tools trigger it
+  workflow_dispatch:   # enables "Run workflow" button
+  repository_dispatch: # allows n8n or API trigger
     types: [post-quora]
 
 jobs:
-  run:
+  post-to-quora:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -20,8 +20,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run Quora Bot
+      - name: Run Quora automation
+        run: node index.js
         env:
           QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
           QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
-        run: node index.js
+          BLOG_TITLE: ${{ github.event.inputs.title }}
+          BLOG_URL: ${{ github.event.inputs.url }}
+          BLOG_SUMMARY: ${{ github.event.inputs.summary }}
+          KEYWORD: ${{ github.event.inputs.keyword }}
+          MODE: ${{ github.event.inputs.mode }}
