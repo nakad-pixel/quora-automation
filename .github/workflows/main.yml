@@ -1,31 +1,31 @@
 name: Quora Automation
 
 on:
-  workflow_dispatch:   # ✅ Manual Run button in Actions tab
-  push:                # ✅ Auto-run when new blog pushed by n8n
+  push:
     branches:
       - main
+    paths:
+      - "latest-blog.txt"   # Only trigger when blog file is updated
 
 jobs:
-  quora-automation:
+  post-to-quora:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: 18
 
       - name: Install dependencies
         run: npm install
 
-      - name: Run Quora Posting Bot
+      - name: Run Puppeteer Quora Poster
         env:
           QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
           QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
           QUORA_COOKIE: ${{ secrets.QUORA_COOKIE }}
-          BLOG_CONTENT: ${{ secrets.BLOG_CONTENT }}
         run: node quora.js
