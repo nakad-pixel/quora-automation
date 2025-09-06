@@ -1,30 +1,77 @@
 name: Quora Automation
 
+permissions:
+  contents: write   # required to commit quora-log.json
 on:
   push:
     paths:
-      - "latest-blog.json"   # Trigger only when blog JSON updates
-  workflow_dispatch:         # Manual trigger option
+      - "latest-blog.json"
+    branches:
+      - main
+  workflow_dispatch: {}
 
 jobs:
-  quora-post:
+  check-and-run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout (with write perms)
         uses: actions/checkout@v3
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install puppeteer fs-extra
+        run: npm ci
 
-      - name: Run Quora Bot
-        run: node scripts/quora-bot.js
+      - name: Check daily Quora limit (skip if already posted today)
+        id: check
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const out = fs.createWriteStream(process.env.GITHUB_OUTPUT);
+          const today = new Date().toISOString().slice(0,10);
+          let skip = 'false';
+          if (fs.existsSync('quora-log.json')) {
+            try {
+              const arr = JSON.parse(fs.readFileSync('quora-log.json', 'utf8'));
+              if (Array.isArray(arr) && arr.length) {
+                const last = arr[arr.length-1].date.slice(0,10);
+                if (last === today) skip = 'true';
+              }
+            } catch(e) {}
+          }
+          out.write(`skip=${skip}\n`);
+          NODE
+
+      - name: Show check result
+        run: echo "skip = ${{ steps.check.outputs.skip }}"
+
+      - name: Run Quora Bot (only if not skipped)
+        if: ${{ steps.check.outputs.skip != 'true' }}
         env:
+          QUORA_SESSION_TOKEN: ${{ secrets.QUORA_SESSION_TOKEN }}
           QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
           QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
-          QUORA_SESSION_TOKEN: ${{ secrets.QUORA_SESSION_TOKEN }}
           RETRY_MAX: 2
+          ENABLE_ENGAGE: "false"    # set to "true" if you want answer upvote/comment (optional)
+        run: |
+          node scripts/quora-bot.js > quora-run-output.log 2>&1 || true
+          cat quora-run-output.log
+
+      - name: Commit quora-log.json if changed
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add quora-log.json || true
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update quora-log" || true
+            git push
+          else
+            echo "No changes to quora-log.json"
+          fi
